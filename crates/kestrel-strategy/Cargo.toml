@@ -1,0 +1,18 @@
+[package]
+name = "kestrel-strategy"
+version = { workspace = true }
+edition = { workspace = true }
+license = { workspace = true }
+publish = { workspace = true }
+
+[dependencies]
+kestrel-core = { path = "../kestrel-core" }
+kestrel-safety = { path = "../kestrel-safety" }
+kestrel-scorer = { path = "../kestrel-scorer" }
+kestrel-state = { path = "../kestrel-state" }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+async-trait = "0.1"

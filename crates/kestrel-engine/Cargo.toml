@@ -1,0 +1,26 @@
+[package]
+name = "kestrel-engine"
+version = { workspace = true }
+edition = { workspace = true }
+license = { workspace = true }
+publish = { workspace = true }
+
+[dependencies]
+kestrel-core = { path = "../kestrel-core" }
+kestrel-ingest = { path = "../kestrel-ingest" }
+kestrel-state = { path = "../kestrel-state" }
+kestrel-safety = { path = "../kestrel-safety" }
+kestrel-scorer = { path = "../kestrel-scorer" }
+kestrel-strategy = { path = "../kestrel-strategy" }
+kestrel-risk = { path = "../kestrel-risk" }
+kestrel-portfolio = { path = "../kestrel-portfolio" }
+kestrel-exec = { path = "../kestrel-exec" }
+kestrel-venues = { path = "../kestrel-venues" }
+kestrel-pnl = { path = "../kestrel-pnl" }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tokio-tungstenite = { workspace = true }
+clap = { workspace = true }

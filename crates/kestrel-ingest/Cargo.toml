@@ -1,0 +1,19 @@
+[package]
+name = "kestrel-ingest"
+version = { workspace = true }
+edition = { workspace = true }
+license = { workspace = true }
+publish = { workspace = true }
+
+[dependencies]
+kestrel-core = { path = "../kestrel-core" }
+anyhow = { workspace = true }
+tokio = { workspace = true }
+tokio-tungstenite = { workspace = true }
+tracing = { workspace = true }
+futures = "0.3"
+yellowstone-grpc-proto = { git = "https://github.com/rpcpool/yellowstone-grpc.git", optional = true }
+
+[features]
+default = []
+yellowstone = ["yellowstone-grpc-proto"]

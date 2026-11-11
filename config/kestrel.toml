@@ -1,0 +1,55 @@
+# Kestrel Configuration
+# Copy this file and fill in your values
+
+mode = "paper"  # paper, backtest, live
+
+[ingest]
+yellowstone_url = "http://localhost:10000"
+yellowstone_token = ""
+ws_url = "wss://api.mainnet-beta.solana.com"
+use_yellowstone = true
+
+[safety]
+enable_honeypot_sim = true
+enable_bundle_detection = true
+min_lp_burned_pct = 80
+max_creator_holding_pct = 5
+block_mint_authority = true
+block_freeze_authority = true
+creator_blacklist = []
+
+[scorer]
+safety_weight = 0.30
+liquidity_weight = 0.20
+momentum_weight = 0.20
+volume_weight = 0.10
+holder_weight = 0.10
+smart_money_weight = 0.10
+min_score_for_entry = 60.0
+safety_block_threshold = 20.0
+
+[risk]
+max_position_sol = 2.0
+max_exposure_sol = 20.0
+max_daily_loss_sol = 5.0
+scout_multiplier = 0.25
+standard_multiplier = 1.0
+conviction_multiplier = 3.0
+conviction_min_confirmations = 2
+max_drawdown_pct = 0.20
+max_consecutive_losses = 5
+cooldown_slots = 100
+regime_min = 0.5
+regime_max = 1.5
+regime_default = 1.0
+
+[portfolio]
+initial_capital_sol = 50.0
+max_strategies = 5
+rebalance_interval_slots = 1000
+
+[execution]
+jito_url = "https://mainnet.block-engine.jito.wtf"
+jito_auth = ""
+rpc_urls = ["https://api.mainnet-beta.solana.com"]
+signer_type = "EnvVar"

@@ -1,0 +1,96 @@
+version: '3.8'
+
+services:
+  # PostgreSQL/TimescaleDB for persistence
+  postgres:
+    image: timescale/timescaledb:latest-pg16
+    container_name: kestrel-postgres
+    environment:
+      POSTGRES_DB: kestrel
+      POSTGRES_USER: kestrel
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-kestrel}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kestrel -d kestrel"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # Redis for caching (optional)
+  redis:
+    image: redis:7-alpine
+    container_name: kestrel-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # Kestrel trading engine
+  kestrel:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    container_name: kestrel-engine
+    environment:
+      - RUST_LOG=${RUST_LOG:-kestrel=info}
+      - YELLOWSTONE_GRPC_URL=${YELLOWSTONE_GRPC_URL:-http://yellowstone:10000}
+      - SOLANA_WS_URL=${SOLANA_WS_URL:-wss://api.mainnet-beta.solana.com}
+      - SOLANA_RPC_URL=${SOLANA_RPC_URL:-https://api.mainnet-beta.solana.com}
+      - WALLET_MNEMONIC=${WALLET_MNEMONIC}
+      - OKX_API_KEY=${OKX_API_KEY}
+      - OKX_API_SECRET=${OKX_API_SECRET}
+      - OKX_API_PASSPHRASE=${OKX_API_PASSPHRASE}
+      - JITO_BLOCK_ENGINE_URL=${JITO_BLOCK_ENGINE_URL:-https://mainnet.block-engine.jito.wtf}
+      - JITO_AUTH_KEY=${JITO_AUTH_KEY}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
+      - DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL}
+      - DATABASE_URL=postgresql://kestrel:kestrel@postgres:5432/kestrel
+      - PARQUET_DATA_DIR=/data/parquet
+      - TRADING_MODE=${TRADING_MODE:-paper}
+      - KESTREL_LIVE_CONFIRM=${KESTREL_LIVE_CONFIRM}
+      - LIVE_EXECUTOR_AVAILABLE=${LIVE_EXECUTOR_AVAILABLE:-false}
+    ports:
+      - "8080:8080"  # Metrics/health endpoint
+    volumes:
+      - kestrel_data:/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '4'
+          memory: 8G
+        reservations:
+          cpus: '2'
+          memory: 4G
+
+  # Yellowstone gRPC (external service - replace with your provider)
+  # yellowstone:
+  #   image: your-yellowstone-image
+  #   container_name: kestrel-yellowstone
+  #   ports:
+  #     - "10000:10000"
+  #   environment:
+  #     - SOLANA_RPC_URL=${SOLANA_RPC_URL}
+  #   restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:
+  kestrel_data:

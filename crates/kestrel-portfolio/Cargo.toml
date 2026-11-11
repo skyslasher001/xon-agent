@@ -1,0 +1,18 @@
+[package]
+name = "kestrel-portfolio"
+version = { workspace = true }
+edition = { workspace = true }
+license = { workspace = true }
+publish = { workspace = true }
+
+[dependencies]
+kestrel-core = { path = "../kestrel-core" }
+kestrel-pnl = { path = "../kestrel-pnl" }
+kestrel-risk = { path = "../kestrel-risk" }
+kestrel-strategy = { path = "../kestrel-strategy" }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+parking_lot = "0.12"
