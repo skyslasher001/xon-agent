@@ -12,6 +12,8 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use tracing::{debug, error, info, warn};
 
+mod regime_dial;
+
 /// Risk configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RiskConfig {
@@ -71,6 +73,7 @@ pub struct RiskState {
     pub regime_multiplier: f64,
     pub kill_switch_activated: bool,
     pub blocked_strategies: BTreeMap<StrategyId, String>,
+    pub current_regime: MarketRegime,
 }
 
 impl Default for RiskState {
@@ -87,6 +90,7 @@ impl Default for RiskState {
             regime_multiplier: 1.0,
             kill_switch_activated: false,
             blocked_strategies: BTreeMap::new(),
+            current_regime: MarketRegime::Unknown,
         }
     }
 }
@@ -100,10 +104,13 @@ pub struct RiskCheck {
     pub warnings: Vec<String>,
 }
 
+use crate::regime_dial::{RegimeDial, MarketRegime};
+
 /// Main risk manager
 pub struct RiskManager {
     config: RiskConfig,
     state: Arc<RwLock<RiskState>>,
+    regime_dial: RegimeDial,
 }
 
 impl RiskManager {
@@ -111,10 +118,14 @@ impl RiskManager {
         let mut state = RiskState::default();
         state.regime_multiplier = config.regime_default;
         state.peak_equity = Lamports(0);
+        state.current_regime = MarketRegime::Unknown;
+
+        let regime_dial = RegimeDial::new(config.clone());
 
         Self {
             config,
             state: Arc::new(RwLock::new(state)),
+            regime_dial,
         }
     }
 
@@ -208,8 +219,12 @@ impl RiskManager {
             }
         }
 
-        // Apply regime multiplier
-        let regime_adjusted = Lamports((final_size.0 as f64 * state.regime_multiplier) as u64);
+        // Apply regime multiplier from Regime Dial
+        let regime_multiplier = self.regime_dial.current_multiplier();
+        state.regime_multiplier = regime_multiplier;
+        state.current_regime = self.regime_dial.current_regime();
+
+        let regime_adjusted = Lamports((final_size.0 as f64 * regime_multiplier) as u64);
 
         RiskCheck {
             allowed: true,
@@ -306,7 +321,35 @@ impl RiskManager {
 
     /// Get current risk state
     pub fn get_state(&self) -> RiskState {
-        self.state.read().clone()
+        let mut state = self.state.read().clone();
+        state.regime_multiplier = self.regime_dial.current_multiplier();
+        state.current_regime = self.regime_dial.current_regime();
+        state
+    }
+
+    /// Update market data for regime detection
+    pub async fn update_market_data(&self, slot: Slot, price: f64, volume: u64, portfolio_value: f64) {
+        self.regime_dial.update(slot, price, volume, portfolio_value).await;
+
+        // Sync regime multiplier to state
+        let mut state = self.state.write();
+        state.regime_multiplier = self.regime_dial.current_multiplier();
+        state.current_regime = self.regime_dial.current_regime();
+    }
+
+    /// Get current market regime
+    pub fn current_regime(&self) -> MarketRegime {
+        self.regime_dial.current_regime()
+    }
+
+    /// Get regime description
+    pub fn regime_description(&self) -> String {
+        self.regime_dial.regime_description()
+    }
+
+    /// Get regime multiplier
+    pub fn regime_multiplier(&self) -> f64 {
+        self.regime_dial.current_multiplier()
     }
 
     /// Reset daily counters (call at midnight)

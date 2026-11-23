@@ -18,6 +18,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use tracing::{debug, info, warn};
 
+mod curve_momentum;
+
 /// Strategy identifier
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum StrategyId {
@@ -386,5 +388,10 @@ mod tests {
 
         assert!(registry.get(StrategyId::LaunchScalper).is_some());
         assert!(registry.get(StrategyId::CurveMomentum).is_none());
+
+        // Test default registry has both
+        let default_registry = StrategyRegistry::default();
+        assert!(default_registry.get(StrategyId::LaunchScalper).is_some());
+        assert!(default_registry.get(StrategyId::CurveMomentum).is_some());
     }
 }

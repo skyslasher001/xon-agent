@@ -12,8 +12,10 @@ tokio = { workspace = true }
 tokio-tungstenite = { workspace = true }
 tracing = { workspace = true }
 futures = "0.3"
-yellowstone-grpc-proto = { git = "https://github.com/rpcpool/yellowstone-grpc.git", optional = true }
+tonic = { workspace = true }
+yellowstone-grpc-proto = { git = "https://github.com/rpcpool/yellowstone-grpc.git" }
+yellowstone-grpc-client = { git = "https://github.com/rpcpool/yellowstone-grpc.git" }
 
 [features]
 default = []
-yellowstone = ["yellowstone-grpc-proto"]
+yellowstone = []

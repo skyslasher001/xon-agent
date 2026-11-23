@@ -9,11 +9,13 @@ use futures::{Stream, StreamExt};
 use std::pin::Pin;
 use tokio::sync::mpsc;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
+use tonic::transport::Channel;
 use tracing::{debug, error, info, warn};
 use yellowstone_grpc_proto::geyser::{
     subscribe_update::UpdateOneof, SubscribeRequest, SubscribeRequestFilterTransactions,
-    SubscribeRequestFilterAccounts,
+    SubscribeRequestFilterAccounts, SubscribeRequestPing,
 };
+use yellowstone_grpc_client::GeyserClient;
 
 /// Ingested event types
 #[derive(Debug, Clone)]
@@ -100,7 +102,7 @@ pub trait IngestSource: Send + Sync {
 pub struct YellowstoneIngest {
     endpoint: String,
     auth_token: Option<String>,
-    tx_sender: Option<mpsc::UnboundedSender<CoreResult<IngestEvent>>>,
+    client: Option<GeyserClient<Channel>>,
 }
 
 impl YellowstoneIngest {
@@ -108,7 +110,7 @@ impl YellowstoneIngest {
         Self {
             endpoint,
             auth_token,
-            tx_sender: None,
+            client: None,
         }
     }
 
@@ -124,27 +126,47 @@ impl YellowstoneIngest {
         SubscribeRequest {
             transactions: std::collections::BTreeMap::from([("pump".to_string(), tx_filter)]),
             accounts: None,
-            slots: None,
+            slots: Some(std::collections::BTreeMap::from([(
+                "slots".to_string(),
+                SubscribeRequestFilterAccounts::default(),
+            )])),
             blocks: None,
             blocks_meta: None,
             entry: None,
             commitment: Some(1), // Confirmed
         }
     }
+
+    async fn connect(&mut self) -> CoreResult<()> {
+        let mut endpoint = tonic::transport::Endpoint::from_shared(self.endpoint.clone())
+            .context("Invalid gRPC endpoint")?;
+
+        if let Some(token) = &self.auth_token {
+            endpoint = endpoint.add_header("x-token", token.parse()?);
+        }
+
+        let channel = endpoint.connect().await.context("Failed to connect to Yellowstone gRPC")?;
+        let client = GeyserClient::new(channel);
+        self.client = Some(client);
+        info!("Connected to Yellowstone gRPC at {}", self.endpoint);
+        Ok(())
+    }
 }
 
 #[async_trait::async_trait]
 impl IngestSource for YellowstoneIngest {
     async fn start(&mut self) -> CoreResult<Pin<Box<dyn Stream<Item = CoreResult<IngestEvent>> + Send>>> {
-        let (tx, rx) = mpsc::unbounded_channel();
-        self.tx_sender = Some(tx.clone());
+        // Connect if not already connected
+        if self.client.is_none() {
+            self.connect().await?;
+        }
 
-        let endpoint = self.endpoint.clone();
-        let auth_token = self.auth_token.clone();
+        let (tx, rx) = mpsc::unbounded_channel();
+        let mut client = self.client.take().context("Client not initialized")?;
         let request = self.build_subscribe_request();
 
         tokio::spawn(async move {
-            if let Err(e) = run_yellowstone_stream(endpoint, auth_token, request, tx).await {
+            if let Err(e) = run_yellowstone_stream(client, request, tx).await {
                 error!("Yellowstone stream error: {}", e);
             }
         });
@@ -153,25 +175,142 @@ impl IngestSource for YellowstoneIngest {
     }
 
     async fn stop(&mut self) -> CoreResult<()> {
-        self.tx_sender = None;
+        self.client = None;
         Ok(())
     }
 
     async fn health_check(&self) -> CoreResult<bool> {
-        Ok(true) // TODO: Implement actual health check
+        Ok(self.client.is_some())
     }
 }
 
 async fn run_yellowstone_stream(
-    endpoint: String,
-    auth_token: Option<String>,
+    mut client: GeyserClient<Channel>,
     request: SubscribeRequest,
     tx: mpsc::UnboundedSender<CoreResult<IngestEvent>>,
 ) -> CoreResult<()> {
-    // TODO: Implement Yellowstone gRPC client
-    // This would use yellowstone-grpc-client to connect and stream
-    warn!("Yellowstone gRPC client not yet implemented");
+    let mut stream = client.subscribe(request).await.context("Failed to subscribe")?.into_inner();
+
+    while let Some(update) = stream.next().await {
+        match update {
+            Ok(update) => {
+                if let Some(update_oneof) = update.update_oneof {
+                    match update_oneof {
+                        UpdateOneof::Transaction(tx_update) => {
+                            // Parse transaction update
+                            let event = parse_transaction_update(tx_update);
+                            if let Some(event) = event {
+                                if tx.send(Ok(event)).is_err() {
+                                    break; // Receiver dropped
+                                }
+                            }
+                        }
+                        UpdateOneof::Account(account_update) => {
+                            let event = parse_account_update(account_update);
+                            if let Some(event) = event {
+                                if tx.send(Ok(event)).is_err() {
+                                    break;
+                                }
+                            }
+                        }
+                        UpdateOneof::Slot(slot_update) => {
+                            let event = parse_slot_update(slot_update);
+                            if let Some(event) = event {
+                                if tx.send(Ok(event)).is_err() {
+                                    break;
+                                }
+                            }
+                        }
+                        UpdateOneof::Ping(_) => {
+                            // Handle ping if needed
+                            debug!("Received ping from Yellowstone");
+                        }
+                        UpdateOneof::Pong(_) => {
+                            debug!("Received pong from Yellowstone");
+                        }
+                        UpdateOneof::Block(_) => {}
+                        UpdateOneof::BlockMeta(_) => {}
+                        UpdateOneof::Entry(_) => {}
+                    }
+                }
+            }
+            Err(e) => {
+                error!("Stream error: {}", e);
+                if tx.send(Err(e.into())).is_err() {
+                    break;
+                }
+            }
+        }
+    }
+
     Ok(())
+}
+
+fn parse_transaction_update(tx_update: yellowstone_grpc_proto::geyser::SubscribeUpdateTransaction) -> Option<IngestEvent> {
+    let signature = Signature::from_bytes(&tx_update.signature).ok()?;
+    let slot = Slot(tx_update.slot);
+    let index = tx_update.index;
+
+    let meta = tx_update.meta.map(|m| TransactionMeta {
+        fee: m.fee,
+        pre_balances: m.pre_balances,
+        post_balances: m.post_balances,
+        pre_token_balances: m.pre_token_balances.into_iter().map(|tb| TokenBalance {
+            account_index: tb.account_index,
+            mint: Pubkey::from_bytes(&tb.mint).ok()?,
+            ui_amount: tb.ui_amount,
+            decimals: tb.decimals as u8,
+        }).collect(),
+        post_token_balances: m.post_token_balances.into_iter().map(|tb| TokenBalance {
+            account_index: tb.account_index,
+            mint: Pubkey::from_bytes(&tb.mint).ok()?,
+            ui_amount: tb.ui_amount,
+            decimals: tb.decimals as u8,
+        }).collect(),
+        log_messages: m.log_messages,
+        err: m.err.map(|e| TransactionError {
+            code: e.code,
+            message: e.message,
+        }),
+    });
+
+    Some(IngestEvent::Transaction(TransactionEvent {
+        signature,
+        slot,
+        transaction: tx_update.transaction,
+        meta,
+        index,
+    }))
+}
+
+fn parse_account_update(account_update: yellowstone_grpc_proto::geyser::SubscribeUpdateAccount) -> Option<IngestEvent> {
+    let pubkey = Pubkey::from_bytes(&account_update.pubkey).ok()?;
+    let owner = Pubkey::from_bytes(&account_update.owner).ok()?;
+
+    Some(IngestEvent::AccountUpdate(AccountUpdateEvent {
+        pubkey,
+        slot: Slot(account_update.slot),
+        lamports: account_update.lamports,
+        owner,
+        executable: account_update.executable,
+        rent_epoch: account_update.rent_epoch,
+        data: account_update.data,
+    }))
+}
+
+fn parse_slot_update(slot_update: yellowstone_grpc_proto::geyser::SubscribeUpdateSlot) -> Option<IngestEvent> {
+    let status = match slot_update.status {
+        1 => SlotStatus::Processed,
+        2 => SlotStatus::Confirmed,
+        3 => SlotStatus::Finalized,
+        _ => SlotStatus::Processed,
+    };
+
+    Some(IngestEvent::SlotUpdate(SlotUpdateEvent {
+        slot: Slot(slot_update.slot),
+        parent: if slot_update.parent > 0 { Some(Slot(slot_update.parent)) } else { None },
+        status,
+    }))
 }
 
 /// WebSocket fallback ingest source
